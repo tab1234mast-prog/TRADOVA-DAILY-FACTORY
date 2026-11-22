@@ -1,1 +1,42 @@
 
+name: TRADOVA Daily Video Factory
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "0 5 * * *"
+
+permissions:
+  contents: read
+
+jobs:
+  video:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install Arabic fonts
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y fonts-noto-core
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Generate video
+        run: python main.py
+
+      - name: Upload MP4
+        uses: actions/upload-artifact@v4
+        with:
+          name: TRADOVA-Daily-Video
+          path: tradova_daily.mp4
+          retention-days: 7
+
