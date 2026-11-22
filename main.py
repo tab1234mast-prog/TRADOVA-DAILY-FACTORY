@@ -1,117 +1,220 @@
 
+
 import os
 import math
 import glob
 import numpy as np
 import imageio.v2 as imageio
-from PIL import Image, ImageDraw, ImageFont
+
+from PIL import Image, ImageDraw, ImageFont, ImageFilter
 import arabic_reshaper
 from bidi.algorithm import get_display
 
+# ==============================
+# TRADOVA VIDEO ENGINE
+# ==============================
+
 W, H = 720, 1280
 FPS = 24
-DURATION = 10
+DURATION = 12
+TOTAL_FRAMES = FPS * DURATION
+
+GOLD = (225, 177, 75)
+LIGHT_GOLD = (255, 220, 145)
+WHITE = (245, 242, 235)
+MUTED = (155, 151, 145)
+BLACK = (5, 5, 7)
+GREEN = (65, 190, 135)
+RED = (210, 80, 80)
+
 OUTPUT = "tradova_daily.mp4"
+
+# Find Arabic font
+font_paths = [
+    "/usr/share/fonts/truetype/noto/NotoSansArabic-Regular.ttf",
+    "/usr/share/fonts/truetype/noto/NotoSansArabic-Bold.ttf",
+    "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"
+]
+
+font_path = next((p for p in font_paths if os.path.exists(p)), None)
+
+if not font_path:
+    matches = glob.glob("/usr/share/fonts/**/*Arabic*.ttf", recursive=True)
+    if matches:
+        font_path = matches[0]
+
+if not font_path:
+    raise RuntimeError("Arabic font not found")
+
+def font(size):
+    return ImageFont.truetype(font_path, size)
 
 def arabic(text):
     return get_display(arabic_reshaper.reshape(text))
 
-def get_font(size):
-    paths = glob.glob("/usr/share/fonts/**/*NotoSansArabic*Regular.ttf",
-                      recursive=True)
-    paths += glob.glob("/usr/share/fonts/**/*NotoNaskhArabic*Regular.ttf",
-                       recursive=True)
-    if paths:
-        return ImageFont.truetype(paths[0], size)
-    return ImageFont.truetype(
-        "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", size
+def draw_center(draw, text, y, size, fill=WHITE):
+    draw.text(
+        (W // 2, y),
+        arabic(text),
+        font=font(size),
+        fill=fill,
+        anchor="mm",
+        stroke_width=0
     )
 
-def render_frame(t):
-    img = Image.new("RGB", (W, H))
-    draw = ImageDraw.Draw(img)
+def make_background():
+    arr = np.zeros((H, W, 3), dtype=np.uint8)
 
-    # Gold-to-black background
     for y in range(H):
         ratio = y / H
-        glow = max(0, 1 - ratio * 2)
-        color = (
-            int(12 + 22 * glow),
-            int(10 + 15 * glow),
-            int(8 + 2 * glow)
+        shade = int(5 + 8 * ratio)
+        arr[y, :, :] = (shade, shade, shade + 2)
+
+    return Image.fromarray(arr)
+
+# Fixed candle data: realistic chart movement
+candles = [
+    (45, 58), (58, 52), (52, 65), (65, 60),
+    (60, 72), (72, 68), (68, 80), (80, 75),
+    (75, 86), (86, 79), (79, 91), (91, 84),
+    (84, 96), (96, 89), (89, 101), (101, 95),
+    (95, 108), (108, 102), (102, 115), (115, 109),
+    (109, 120), (120, 113), (113, 126), (126, 119),
+    (119, 132), (132, 124), (124, 137), (137, 130)
+]
+
+def draw_candles(image, progress):
+    draw = ImageDraw.Draw(image, "RGBA")
+
+    chart_x = 65
+    chart_y = 470
+    chart_w = 590
+    chart_h = 370
+
+    # Chart grid
+    for i in range(5):
+        y = chart_y + i * chart_h // 4
+        draw.line(
+            (chart_x, y, chart_x + chart_w, y),
+            fill=(190, 160, 90, 28),
+            width=1
         )
-        draw.line((0, y, W, y), fill=color)
 
-    # Animated gold light
-    glow_x = int(W / 2 + math.sin(t * 1.5) * 100)
-    draw.ellipse(
-        (glow_x-180, 180, glow_x+180, 540),
-        fill=(35, 25, 8)
-    )
+    visible = max(1, int(len(candles) * progress))
+    candle_width = 11
+    spacing = 20
 
-    # Decorative frame
-    draw.rounded_rectangle(
-        (35, 35, W-35, H-35),
-        radius=24, outline=(190, 145, 55), width=2
-    )
+    for i in range(visible):
+        open_price, close_price = candles[i]
 
-    # Animated candlesticks
-    for i in range(9):
-        x = 100 + i * 65
-        height = 100 + int(55 * math.sin(t * 2 + i))
-        top = 650 - height
-        draw.line((x+12, top-35, x+12, 700), fill=(218, 173, 75), width=3)
-        draw.rectangle(
-            (x, top, x+24, top+height//2),
-            fill=(218, 173, 75)
+        x = chart_x + 12 + i * spacing
+        center = chart_y + chart_h - (close_price - 40) * 5.4
+        open_y = chart_y + chart_h - (open_price - 40) * 5.4
+
+        high_y = min(center, open_y) - 24
+        low_y = max(center, open_y) + 24
+
+        rising = close_price >= open_price
+        color = GREEN if rising else RED
+
+        draw.line(
+            (x + candle_width // 2, high_y,
+             x + candle_width // 2, low_y),
+            fill=(*color, 220),
+            width=2
         )
 
-    # Main title
-    title = arabic("تعلم التداول باحتراف")
-    font = get_font(48)
-    box = draw.textbbox((0, 0), title, font=font)
-    draw.text(
-        ((W-(box[2]-box[0]))//2, 300),
-        title, font=font, fill=(245, 205, 115)
+        top = min(center, open_y)
+        bottom = max(center, open_y)
+
+        if bottom - top < 5:
+            bottom = top + 5
+
+        draw.rounded_rectangle(
+            (x, top, x + candle_width, bottom),
+            radius=2,
+            fill=(*color, 230)
+        )
+
+    # Gold chart border
+    draw.line(
+        (chart_x, chart_y + chart_h + 25,
+         chart_x + chart_w, chart_y + chart_h + 25),
+        fill=(GOLD[0], GOLD[1], GOLD[2], 90),
+        width=2
     )
 
-    # Subtitle
-    subtitle = arabic("السيولة هي مفتاح حركة السعر")
-    font2 = get_font(30)
-    box = draw.textbbox((0, 0), subtitle, font=font2)
-    draw.text(
-        ((W-(box[2]-box[0]))//2, 410),
-        subtitle, font=font2, fill=(235, 235, 235)
-    )
+def render_frame(frame_number):
+    progress = frame_number / TOTAL_FRAMES
+
+    image = make_background()
+
+    # Soft gold lighting
+    glow = Image.new("RGBA", (W, H), (0, 0, 0, 0))
+    gd = ImageDraw.Draw(glow)
+    gd.ellipse((170, 250, 550, 630), fill=(190, 130, 35, 28))
+    glow = glow.filter(ImageFilter.GaussianBlur(100))
+    image = Image.alpha_composite(image.convert("RGBA"), glow)
+
+    draw = ImageDraw.Draw(image)
 
     # Brand
-    brand_font = get_font(65)
-    draw.text((W//2, 920), "TRADOVA",
-              font=brand_font, fill=(218, 173, 75),
-              anchor="mm")
+    draw_center(draw, "TRADOVA", 105, 52, LIGHT_GOLD)
 
-    footer = arabic("معرفة اليوم، احتراف الغد")
-    draw.text((W//2, 1000), footer,
-              font=get_font(25), fill=(190, 190, 190),
-              anchor="mm")
-
-    return np.array(img)
-
-def main():
-    print("Starting TRADOVA video production...")
-    writer = imageio.get_writer(
-        OUTPUT, fps=FPS, codec="libx264",
-        quality=8, macro_block_size=1
+    draw.line(
+        (190, 155, 530, 155),
+        fill=(*GOLD, 150),
+        width=2
     )
 
-    try:
-        for frame in range(FPS * DURATION):
-            t = frame / FPS
-            writer.append_data(render_frame(t))
-    finally:
-        writer.close()
+    # Main Arabic title
+    draw_center(draw, "ليش السعر يضرب القمة ويرجع؟",
+                255, 35, WHITE)
 
-    print(f"Video ready: {OUTPUT}")
+    draw_center(draw, "الجواب هو السيولة",
+                325, 42, LIGHT_GOLD)
 
-if __name__ == "__main__":
-    main()
+    # Chart
+    draw_candles(image, progress)
+
+    # Explanation
+    draw = ImageDraw.Draw(image)
+
+    draw_center(draw, "السوق يبحث عن أوامر المتداولين",
+                940, 29, WHITE)
+
+    draw_center(draw, "قبل أن يحدد اتجاهه",
+                990, 31, LIGHT_GOLD)
+
+    # Footer
+    draw.line(
+        (150, 1090, 570, 1090),
+        fill=(*GOLD, 100),
+        width=1
+    )
+
+    draw_center(draw, "تعلم التداول بفهم حركة السعر",
+                1140, 23, MUTED)
+
+    draw_center(draw, "TRADOVA",
+                1200, 25, LIGHT_GOLD)
+
+    return image.convert("RGB")
+
+# ==============================
+# VIDEO RENDER
+# ==============================
+
+with imageio.get_writer(
+    OUTPUT,
+    fps=FPS,
+    codec="libx264",
+    quality=8,
+    macro_block_size=16
+) as writer:
+
+    for frame in range(TOTAL_FRAMES):
+        img = render_frame(frame)
+        writer.append_data(np.asarray(img))
+
+print("TRADOVA video created successfully:", OUTPUT)
